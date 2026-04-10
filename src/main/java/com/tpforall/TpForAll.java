@@ -40,7 +40,7 @@ public class TpForAll implements ModInitializer {
 
         CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) -> {
 
-            // ── /tp <x y z> (para waypoints do Xaero's) ──────────────────
+            // ── /tp <x y z> e /tp @s <x y z> (para waypoints do Xaero's) ─
             dispatcher.register(
                 CommandManager.literal("tp")
                     .requires(source -> source.isExecutedByPlayer())
@@ -48,7 +48,6 @@ public class TpForAll implements ModInitializer {
                         .executes(ctx -> {
                             ServerPlayerEntity player = getPlayer(ctx.getSource());
                             if (player == null) return 0;
-
                             Vec3d pos = Vec3ArgumentType.getVec3(ctx, "pos");
                             player.teleport(player.getServerWorld(), pos.x, pos.y, pos.z,
                                     player.getYaw(), player.getPitch());
@@ -57,6 +56,21 @@ public class TpForAll implements ModInitializer {
                                 .formatted(Formatting.GREEN), false);
                             return 1;
                         })
+                    )
+                    .then(CommandManager.argument("target", EntityArgumentType.player())
+                        .then(CommandManager.argument("pos", Vec3ArgumentType.vec3())
+                            .executes(ctx -> {
+                                ServerPlayerEntity player = getPlayer(ctx.getSource());
+                                if (player == null) return 0;
+                                Vec3d pos = Vec3ArgumentType.getVec3(ctx, "pos");
+                                player.teleport(player.getServerWorld(), pos.x, pos.y, pos.z,
+                                        player.getYaw(), player.getPitch());
+                                ctx.getSource().sendFeedback(() -> Text.literal(
+                                    "✔ Teleportado para " + fmt(pos.x) + ", " + fmt(pos.y) + ", " + fmt(pos.z))
+                                    .formatted(Formatting.GREEN), false);
+                                return 1;
+                            })
+                        )
                     )
             );
 
