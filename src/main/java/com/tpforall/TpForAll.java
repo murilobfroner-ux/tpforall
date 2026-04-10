@@ -6,11 +6,15 @@ import net.minecraft.command.argument.EntityArgumentType;
 import net.minecraft.server.command.CommandManager;
 import net.minecraft.server.command.ServerCommandSource;
 import net.minecraft.server.network.ServerPlayerEntity;
+import net.minecraft.server.world.ServerWorld;
 import net.minecraft.text.ClickEvent;
 import net.minecraft.text.MutableText;
 import net.minecraft.text.Style;
 import net.minecraft.text.Text;
 import net.minecraft.util.Formatting;
+import net.minecraft.util.math.BlockPos;
+import net.minecraft.registry.RegistryKey;
+import net.minecraft.world.World;
 
 import com.mojang.brigadier.context.CommandContext;
 import com.mojang.brigadier.exceptions.CommandSyntaxException;
@@ -28,12 +32,16 @@ public class TpForAll implements ModInitializer {
 
     private static final Map<UUID, TpaRequest> pendingRequests = new HashMap<>();
 
+    // Mapa: UUID do jogador -> home salva
+    private static final Map<UUID, HomeLocation> homes = new HashMap<>();
+
     @Override
     public void onInitialize() {
         LOGGER.info("TpForAll mod loaded!");
 
         CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) -> {
 
+            // ── /tpa <jogador> ────────────────────────────────────────────
             dispatcher.register(
                 CommandManager.literal("tpa")
                     .requires(source -> source.isExecutedByPlayer())
@@ -79,6 +87,7 @@ public class TpForAll implements ModInitializer {
                     )
             );
 
+            // ── /tpaccept ─────────────────────────────────────────────────
             dispatcher.register(
                 CommandManager.literal("tpaccept")
                     .requires(source -> source.isExecutedByPlayer())
@@ -118,6 +127,7 @@ public class TpForAll implements ModInitializer {
                     })
             );
 
+            // ── /tpdeny ───────────────────────────────────────────────────
             dispatcher.register(
                 CommandManager.literal("tpdeny")
                     .requires(source -> source.isExecutedByPlayer())
@@ -144,8 +154,62 @@ public class TpForAll implements ModInitializer {
                         return 1;
                     })
             );
+
+            // ── /sethome ──────────────────────────────────────────────────
+            dispatcher.register(
+                CommandManager.literal("sethome")
+                    .requires(source -> source.isExecutedByPlayer())
+                    .executes(ctx -> {
+                        ServerPlayerEntity player = getPlayer(ctx.getSource());
+                        if (player == null) return 0;
+
+                        homes.put(player.getUuid(), new HomeLocation(
+                            player.getServerWorld().getRegistryKey(),
+                            player.getX(), player.getY(), player.getZ(),
+                            player.getYaw(), player.getPitch()
+                        ));
+
+                        ctx.getSource().sendFeedback(() -> Text.literal(
+                            "🏠 Home definida em " + fmt(player.getX()) + ", " +
+                            fmt(player.getY()) + ", " + fmt(player.getZ()) + "!")
+                            .formatted(Formatting.GREEN), false);
+                        return 1;
+                    })
+            );
+
+            // ── /home ─────────────────────────────────────────────────────
+            dispatcher.register(
+                CommandManager.literal("home")
+                    .requires(source -> source.isExecutedByPlayer())
+                    .executes(ctx -> {
+                        ServerPlayerEntity player = getPlayer(ctx.getSource());
+                        if (player == null) return 0;
+
+                        HomeLocation home = homes.get(player.getUuid());
+                        if (home == null) {
+                            ctx.getSource().sendError(Text.literal(
+                                "Você não tem uma home definida! Use /sethome primeiro."));
+                            return 0;
+                        }
+
+                        ServerWorld world = player.getServer().getWorld(home.dimension);
+                        if (world == null) {
+                            ctx.getSource().sendError(Text.literal("A dimensão da sua home não existe mais."));
+                            return 0;
+                        }
+
+                        player.teleport(world, home.x, home.y, home.z, home.yaw, home.pitch);
+
+                        ctx.getSource().sendFeedback(() -> Text.literal(
+                            "🏠 Teleportado para sua home!")
+                            .formatted(Formatting.GREEN), false);
+                        return 1;
+                    })
+            );
         });
     }
+
+    // ── Helpers ───────────────────────────────────────────────────────────────
 
     private ServerPlayerEntity getPlayer(ServerCommandSource source) {
         try {
@@ -162,6 +226,24 @@ public class TpForAll implements ModInitializer {
         } catch (CommandSyntaxException e) {
             ctx.getSource().sendError(Text.literal("Jogador não encontrado."));
             return null;
+        }
+    }
+
+    private String fmt(double v) {
+        return String.format("%.1f", v);
+    }
+
+    // ── HomeLocation ──────────────────────────────────────────────────────────
+
+    private static class HomeLocation {
+        final RegistryKey<World> dimension;
+        final double x, y, z;
+        final float yaw, pitch;
+
+        HomeLocation(RegistryKey<World> dimension, double x, double y, double z, float yaw, float pitch) {
+            this.dimension = dimension;
+            this.x = x; this.y = y; this.z = z;
+            this.yaw = yaw; this.pitch = pitch;
         }
     }
 }
