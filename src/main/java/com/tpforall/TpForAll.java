@@ -3,6 +3,7 @@ package com.tpforall;
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.minecraft.command.argument.EntityArgumentType;
+import net.minecraft.command.argument.Vec3ArgumentType;
 import net.minecraft.server.command.CommandManager;
 import net.minecraft.server.command.ServerCommandSource;
 import net.minecraft.server.network.ServerPlayerEntity;
@@ -12,7 +13,7 @@ import net.minecraft.text.MutableText;
 import net.minecraft.text.Style;
 import net.minecraft.text.Text;
 import net.minecraft.util.Formatting;
-import net.minecraft.util.math.BlockPos;
+import net.minecraft.util.math.Vec3d;
 import net.minecraft.registry.RegistryKey;
 import net.minecraft.world.World;
 
@@ -31,8 +32,6 @@ public class TpForAll implements ModInitializer {
     public static final Logger LOGGER = LoggerFactory.getLogger("tpforall");
 
     private static final Map<UUID, TpaRequest> pendingRequests = new HashMap<>();
-
-    // Mapa: UUID do jogador -> home salva
     private static final Map<UUID, HomeLocation> homes = new HashMap<>();
 
     @Override
@@ -40,6 +39,26 @@ public class TpForAll implements ModInitializer {
         LOGGER.info("TpForAll mod loaded!");
 
         CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) -> {
+
+            // ── /tp <x y z> (para waypoints do Xaero's) ──────────────────
+            dispatcher.register(
+                CommandManager.literal("tp")
+                    .requires(source -> source.isExecutedByPlayer())
+                    .then(CommandManager.argument("pos", Vec3ArgumentType.vec3())
+                        .executes(ctx -> {
+                            ServerPlayerEntity player = getPlayer(ctx.getSource());
+                            if (player == null) return 0;
+
+                            Vec3d pos = Vec3ArgumentType.getVec3(ctx, "pos");
+                            player.teleport(player.getServerWorld(), pos.x, pos.y, pos.z,
+                                    player.getYaw(), player.getPitch());
+                            ctx.getSource().sendFeedback(() -> Text.literal(
+                                "✔ Teleportado para " + fmt(pos.x) + ", " + fmt(pos.y) + ", " + fmt(pos.z))
+                                .formatted(Formatting.GREEN), false);
+                            return 1;
+                        })
+                    )
+            );
 
             // ── /tpa <jogador> ────────────────────────────────────────────
             dispatcher.register(
@@ -209,8 +228,6 @@ public class TpForAll implements ModInitializer {
         });
     }
 
-    // ── Helpers ───────────────────────────────────────────────────────────────
-
     private ServerPlayerEntity getPlayer(ServerCommandSource source) {
         try {
             return source.getPlayerOrThrow();
@@ -232,8 +249,6 @@ public class TpForAll implements ModInitializer {
     private String fmt(double v) {
         return String.format("%.1f", v);
     }
-
-    // ── HomeLocation ──────────────────────────────────────────────────────────
 
     private static class HomeLocation {
         final RegistryKey<World> dimension;
