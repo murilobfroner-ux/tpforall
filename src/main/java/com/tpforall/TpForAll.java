@@ -4,6 +4,7 @@ import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.minecraft.command.argument.EntityArgumentType;
 import net.minecraft.command.argument.Vec3ArgumentType;
+import net.minecraft.command.argument.StringArgumentType;
 import net.minecraft.server.command.CommandManager;
 import net.minecraft.server.command.ServerCommandSource;
 import net.minecraft.server.network.ServerPlayerEntity;
@@ -32,7 +33,9 @@ public class TpForAll implements ModInitializer {
     public static final Logger LOGGER = LoggerFactory.getLogger("tpforall");
 
     private static final Map<UUID, TpaRequest> pendingRequests = new HashMap<>();
-    private static final Map<UUID, HomeLocation> homes = new HashMap<>();
+
+    // Mapa: UUID -> (nome da home -> localização)
+    private static final Map<UUID, Map<String, HomeLocation>> homes = new HashMap<>();
 
     @Override
     public void onInitialize() {
@@ -40,7 +43,7 @@ public class TpForAll implements ModInitializer {
 
         CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) -> {
 
-            // ── /tp <x y z> e /tp @s <x y z> (para waypoints do Xaero's) ─
+            // ── /tp <x y z> e /tp @s <x y z> (Xaero's) ──────────────────
             dispatcher.register(
                 CommandManager.literal("tp")
                     .requires(source -> source.isExecutedByPlayer())
@@ -188,59 +191,134 @@ public class TpForAll implements ModInitializer {
                     })
             );
 
-            // ── /sethome ──────────────────────────────────────────────────
+            // ── /sethome [nome] ───────────────────────────────────────────
             dispatcher.register(
                 CommandManager.literal("sethome")
                     .requires(source -> source.isExecutedByPlayer())
-                    .executes(ctx -> {
-                        ServerPlayerEntity player = getPlayer(ctx.getSource());
-                        if (player == null) return 0;
-
-                        homes.put(player.getUuid(), new HomeLocation(
-                            player.getServerWorld().getRegistryKey(),
-                            player.getX(), player.getY(), player.getZ(),
-                            player.getYaw(), player.getPitch()
-                        ));
-
-                        ctx.getSource().sendFeedback(() -> Text.literal(
-                            "🏠 Home definida em " + fmt(player.getX()) + ", " +
-                            fmt(player.getY()) + ", " + fmt(player.getZ()) + "!")
-                            .formatted(Formatting.GREEN), false);
-                        return 1;
-                    })
+                    // /sethome (sem nome, usa "home" como padrão)
+                    .executes(ctx -> setSingleHome(ctx.getSource(), "home"))
+                    // /sethome <nome>
+                    .then(CommandManager.argument("nome", StringArgumentType.word())
+                        .executes(ctx -> setSingleHome(ctx.getSource(),
+                            StringArgumentType.getString(ctx, "nome")))
+                    )
             );
 
-            // ── /home ─────────────────────────────────────────────────────
+            // ── /home [nome] ──────────────────────────────────────────────
             dispatcher.register(
                 CommandManager.literal("home")
+                    .requires(source -> source.isExecutedByPlayer())
+                    // /home (sem nome, vai para "home" padrão)
+                    .executes(ctx -> goHome(ctx.getSource(), "home"))
+                    // /home <nome>
+                    .then(CommandManager.argument("nome", StringArgumentType.word())
+                        .executes(ctx -> goHome(ctx.getSource(),
+                            StringArgumentType.getString(ctx, "nome")))
+                    )
+            );
+
+            // ── /delhome [nome] ───────────────────────────────────────────
+            dispatcher.register(
+                CommandManager.literal("delhome")
+                    .requires(source -> source.isExecutedByPlayer())
+                    .executes(ctx -> delHome(ctx.getSource(), "home"))
+                    .then(CommandManager.argument("nome", StringArgumentType.word())
+                        .executes(ctx -> delHome(ctx.getSource(),
+                            StringArgumentType.getString(ctx, "nome")))
+                    )
+            );
+
+            // ── /homes (lista todas as homes) ─────────────────────────────
+            dispatcher.register(
+                CommandManager.literal("homes")
                     .requires(source -> source.isExecutedByPlayer())
                     .executes(ctx -> {
                         ServerPlayerEntity player = getPlayer(ctx.getSource());
                         if (player == null) return 0;
 
-                        HomeLocation home = homes.get(player.getUuid());
-                        if (home == null) {
-                            ctx.getSource().sendError(Text.literal(
-                                "Você não tem uma home definida! Use /sethome primeiro."));
+                        Map<String, HomeLocation> playerHomes = homes.get(player.getUuid());
+                        if (playerHomes == null || playerHomes.isEmpty()) {
+                            ctx.getSource().sendError(Text.literal("Você não tem nenhuma home definida."));
                             return 0;
                         }
 
-                        ServerWorld world = player.getServer().getWorld(home.dimension);
-                        if (world == null) {
-                            ctx.getSource().sendError(Text.literal("A dimensão da sua home não existe mais."));
-                            return 0;
+                        MutableText msg = Text.literal("🏠 Suas homes: ").formatted(Formatting.YELLOW);
+                        String[] nomes = playerHomes.keySet().toArray(new String[0]);
+                        for (int i = 0; i < nomes.length; i++) {
+                            MutableText link = Text.literal(nomes[i])
+                                .setStyle(Style.EMPTY
+                                    .withColor(Formatting.AQUA)
+                                    .withClickEvent(new ClickEvent(ClickEvent.Action.RUN_COMMAND, "/home " + nomes[i])));
+                            msg = msg.append(link);
+                            if (i < nomes.length - 1) msg = msg.append(Text.literal(", ").formatted(Formatting.GRAY));
                         }
-
-                        player.teleport(world, home.x, home.y, home.z, home.yaw, home.pitch);
-
-                        ctx.getSource().sendFeedback(() -> Text.literal(
-                            "🏠 Teleportado para sua home!")
-                            .formatted(Formatting.GREEN), false);
+                        ctx.getSource().sendFeedback(() -> msg, false);
                         return 1;
                     })
             );
         });
     }
+
+    // ── Lógica de homes ───────────────────────────────────────────────────────
+
+    private int setSingleHome(ServerCommandSource source, String nome) {
+        ServerPlayerEntity player = getPlayer(source);
+        if (player == null) return 0;
+
+        homes.computeIfAbsent(player.getUuid(), k -> new HashMap<>())
+            .put(nome.toLowerCase(), new HomeLocation(
+                player.getServerWorld().getRegistryKey(),
+                player.getX(), player.getY(), player.getZ(),
+                player.getYaw(), player.getPitch()
+            ));
+
+        source.sendFeedback(() -> Text.literal(
+            "🏠 Home \"" + nome + "\" definida em " +
+            fmt(player.getX()) + ", " + fmt(player.getY()) + ", " + fmt(player.getZ()) + "!")
+            .formatted(Formatting.GREEN), false);
+        return 1;
+    }
+
+    private int goHome(ServerCommandSource source, String nome) {
+        ServerPlayerEntity player = getPlayer(source);
+        if (player == null) return 0;
+
+        Map<String, HomeLocation> playerHomes = homes.get(player.getUuid());
+        HomeLocation home = playerHomes != null ? playerHomes.get(nome.toLowerCase()) : null;
+
+        if (home == null) {
+            source.sendError(Text.literal("Home \"" + nome + "\" não encontrada! Use /sethome " + nome + " para criá-la."));
+            return 0;
+        }
+
+        ServerWorld world = player.getServer().getWorld(home.dimension);
+        if (world == null) {
+            source.sendError(Text.literal("A dimensão da home \"" + nome + "\" não existe mais."));
+            return 0;
+        }
+
+        player.teleport(world, home.x, home.y, home.z, home.yaw, home.pitch);
+        source.sendFeedback(() -> Text.literal("🏠 Teleportado para a home \"" + nome + "\"!")
+            .formatted(Formatting.GREEN), false);
+        return 1;
+    }
+
+    private int delHome(ServerCommandSource source, String nome) {
+        ServerPlayerEntity player = getPlayer(source);
+        if (player == null) return 0;
+
+        Map<String, HomeLocation> playerHomes = homes.get(player.getUuid());
+        if (playerHomes == null || playerHomes.remove(nome.toLowerCase()) == null) {
+            source.sendError(Text.literal("Home \"" + nome + "\" não encontrada."));
+            return 0;
+        }
+
+        source.sendFeedback(() -> Text.literal("🗑 Home \"" + nome + "\" deletada.")
+            .formatted(Formatting.RED), false);
+        return 1;
+    }
+
+    // ── Helpers ───────────────────────────────────────────────────────────────
 
     private ServerPlayerEntity getPlayer(ServerCommandSource source) {
         try {
