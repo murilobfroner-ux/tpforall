@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "id": "tpforall",
+  "version": "1.0.0",
+  "name": "TpForAll",
+  "description": "Permite que qualquer jogador use /tpa sem ser OP.",
+  "authors": ["você"],
+  "contact": {},
+  "license": "MIT",
+  "environment": "*",
+  "entrypoints": {
+    "main": ["com.tpforall.TpForAll"]
+  },
+  "depends": {
+    "fabricloader": ">=0.15.0",
+    "fabric-api": "*",
+    "minecraft": "~1.21.1"
+  }
+}
